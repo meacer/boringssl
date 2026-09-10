@@ -157,6 +157,12 @@ static const struct argument kArguments[] = {
         "A relative OID in text form (e.g. '1.2.3') to configure on the server credential for Trust Anchor Identifiers.",
     },
     {
+        "-tai-fallback-cert",
+        kOptionalArgument,
+        "PEM-encoded file containing a fallback leaf certificate chain to "
+        "serve when the client does not match -trust-anchor-id.",
+    },
+    {
         "-proxy",
         kOptionalArgument,
         "Reverse-proxy decrypted traffic to the specified backend host:port (e.g. '127.0.0.1:80' for Apache).",
@@ -485,6 +491,15 @@ bool Server(const std::vector<std::string> &args) {
     if (!SSL_CTX_add1_credential(ctx.get(), cred.get())) {
       fprintf(stderr, "Failed to add credential with trust anchor ID.\n");
       return false;
+    }
+    if (args_map.count("-tai-fallback-cert") != 0) {
+      const std::string &fallback_cert = args_map["-tai-fallback-cert"];
+      if (!SSL_CTX_use_certificate_chain_file(ctx.get(),
+                                              fallback_cert.c_str())) {
+        fprintf(stderr, "Failed to load fallback cert chain: %s\n",
+                fallback_cert.c_str());
+        return false;
+      }
     }
   }
 

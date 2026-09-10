@@ -6,7 +6,8 @@ This branch adds CLI support to `bssl server` and `bssl client` for serving and 
 
 * **`tool/server.cc` (`bssl server`)**:
   * Added `-trust-anchor-id <relative-oid>` (e.g., `-trust-anchor-id 1.2.3`): Configures an `SSL_CREDENTIAL` (`SSL_CREDENTIAL_set1_trust_anchor_id` + `SSL_CREDENTIAL_set_must_match_issuer`) on the server's `SSL_CTX`, using either the provided `-key` / `-cert` PEM files or an auto-generated self-signed certificate. Also registers a default fallback credential so non-TAI clients can connect.
-  * Added `-proxy <host:port>` (e.g., `-proxy 127.0.0.1:80`): Reverse-proxies decrypted TLS traffic bidirectionally to a backend HTTP server (e.g., Apache).
+  * Added `-tai-fallback-cert <path>`: Specifies a distinct certificate chain (e.g., a standalone MTC) to use as the default fallback credential when the client does not match `-trust-anchor-id`, while `-cert` (e.g., a landmark-relative MTC) is served when `-trust-anchor-id` matches.
+  * Added `-proxy <host:port>` (e.g., `-proxy 127.0.0.1:80`): Reverse-proxies decrypted TLS traffic bidirectionally to a backend HTTP server (e.g., Apache or Nginx).
 * **`tool/client.cc` & `tool/transport_common.cc` (`bssl client`)**:
   * Logs whether the server's certificate matched the client's requested trust anchor ID (`SSL_peer_matched_trust_anchor`) and prints the server's available trust anchor IDs (`SSL_get0_peer_available_trust_anchors`).
 
