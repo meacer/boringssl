@@ -397,6 +397,13 @@ void PrintConnectionInfo(BIO *bio, const SSL *ssl) {
     X509_NAME_print_ex(bio, X509_get_issuer_name(peer.get()), 0,
                        XN_FLAG_ONELINE);
     BIO_printf(bio, "\n");
+    const STACK_OF(CRYPTO_BUFFER) *chain = SSL_get0_peer_certificates(ssl);
+    if (chain != nullptr) {
+      BIO_printf(bio, "  Cert chain length: %zu\n",
+                 sk_CRYPTO_BUFFER_num(chain));
+    }
+    BIO_printf(bio, "  Peer matched trust anchor: %s\n",
+               SSL_peer_matched_trust_anchor(ssl) ? "yes" : "no");
   }
 
   // Print the peer RPK.

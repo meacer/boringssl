@@ -1,4 +1,65 @@
-# BoringSSL
+# BoringSSL (`tai-server` Branch)
+
+This branch adds CLI support to `bssl server` and `bssl client` for serving and testing **TLS Trust Anchor Identifiers (TAI)** (`draft-ietf-tls-trust-anchor-ids`), including a lightweight reverse-proxy mode (`-proxy`) to terminate TLS+TAI in front of an existing HTTP server (such as Apache).
+
+## Summary of Changes
+
+* **`tool/server.cc` (`bssl server`)**:
+  * Added `-trust-anchor-id <relative-oid>` (e.g., `-trust-anchor-id 1.2.3`): Configures an `SSL_CREDENTIAL` (`SSL_CREDENTIAL_set1_trust_anchor_id` + `SSL_CREDENTIAL_set_must_match_issuer`) on the server's `SSL_CTX`, using either the provided `-key` / `-cert` PEM files or an auto-generated self-signed certificate. Also registers a default fallback credential so non-TAI clients can connect.
+  * Added `-proxy <host:port>` (e.g., `-proxy 127.0.0.1:80`): Reverse-proxies decrypted TLS traffic bidirectionally to a backend HTTP server (e.g., Apache).
+* **`tool/client.cc` & `tool/transport_common.cc` (`bssl client`)**:
+  * Logs whether the server's certificate matched the client's requested trust anchor ID (`SSL_peer_matched_trust_anchor`) and prints the server's available trust anchor IDs (`SSL_get0_peer_available_trust_anchors`).
+
+## Building the Standalone `bssl` Binary
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target bssl -j$(nproc)
+strip --strip-all build/bssl
+```
+
+This produces a single ~2.7 MB self-contained executable (`build/bssl`) with no external `.so` dependencies beyond standard system libraries (`libc`, `libstdc++`).
+
+## Serving a TAI-Enabled Test Site
+
+### 1. In front of Apache (Reverse Proxy on Port 443)
+Run `bssl server` on port 443 to terminate TLS 1.3 + TAI and forward HTTP traffic to Apache listening on `127.0.0.1:80`:
+
+```bash
+sudo ./build/bssl server \
+  -accept 443 \
+  -key /etc/ssl/private/site.key \
+  -cert /etc/ssl/certs/site.pem \
+  -trust-anchor-id 1.2.3 \
+  -proxy 127.0.0.1:80 \
+  -loop
+```
+
+### 2. Standalone Diagnostic Responder (`-www`)
+To run without a backend HTTP server (responds with connection and handshake details on `GET /`):
+
+```bash
+./build/bssl server -accept 8443 -trust-anchor-id 1.2.3 -www -loop
+```
+
+## Verifying TAI Negotiation from the Command Line
+
+Use `bssl client` with `-request-trust-anchors`:
+
+```bash
+echo -e "GET / HTTP/1.0\r\nHost: localhost\r\n\r\n" | \
+  ./build/bssl client -connect 127.0.0.1:8443 -request-trust-anchors 1.2.3
+```
+
+Example output showing TAI match:
+```text
+  [Verify] Peer matched trust anchor: yes
+  [Verify] Server available trust anchors (4 bytes): 03 01 02 03
+```
+
+---
+
+# BoringSSL (Upstream)
 
 BoringSSL is a fork of OpenSSL that is designed to meet Google's needs.
 

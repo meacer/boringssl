@@ -662,6 +662,19 @@ bool Client(const std::vector<std::string> &args) {
     SSL_CTX_set_custom_verify(
         ctx.get(), SSL_VERIFY_PEER,
         [](SSL *ssl, uint8_t *out_alert) -> ssl_verify_result_t {
+          fprintf(stderr, "  [Verify] Peer matched trust anchor: %s\n",
+                  SSL_peer_matched_trust_anchor(ssl) ? "yes" : "no");
+          const uint8_t *avail = nullptr;
+          size_t avail_len = 0;
+          SSL_get0_peer_available_trust_anchors(ssl, &avail, &avail_len);
+          if (avail_len > 0) {
+            fprintf(stderr, "  [Verify] Server available trust anchors (%zu bytes):",
+                    avail_len);
+            for (size_t i = 0; i < avail_len; ++i) {
+              fprintf(stderr, " %02x", avail[i]);
+            }
+            fprintf(stderr, "\n");
+          }
           return ssl_verify_ok;
         });
   }

@@ -21,6 +21,12 @@
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
 
+#if !defined(OPENSSL_WINDOWS)
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 #include "internal.h"
 #include "transport_common.h"
 
@@ -144,6 +150,16 @@ static const struct argument kArguments[] = {
         "-accept-cert-types",
         kOptionalArgument,
         "A comma-separated list of cert types to accept from the client.",
+    },
+    {
+        "-trust-anchor-id",
+        kOptionalArgument,
+        "A relative OID in text form (e.g. '1.2.3') to configure on the server credential for Trust Anchor Identifiers.",
+    },
+    {
+        "-proxy",
+        kOptionalArgument,
+        "Reverse-proxy decrypted traffic to the specified backend host:port (e.g. '127.0.0.1:80' for Apache).",
     },
     {
         "",
@@ -276,6 +292,58 @@ static bool HandleWWW(SSL *ssl) {
   return true;
 }
 
+static bool HandleProxy(SSL *ssl, const std::string &target) {
+  int backend_sock = -1;
+  if (!Connect(&backend_sock, target)) {
+    fprintf(stderr, "Failed to connect to backend %s\n", target.c_str());
+    return false;
+  }
+  int ssl_sock = SSL_get_fd(ssl);
+#if !defined(OPENSSL_WINDOWS)
+  pollfd pfds[2] = {};
+  pfds[0].fd = ssl_sock;
+  pfds[0].events = POLLIN;
+  pfds[1].fd = backend_sock;
+  pfds[1].events = POLLIN;
+
+  uint8_t buf[16384];
+  while (true) {
+    while (SSL_pending(ssl) > 0) {
+      int n = SSL_read(ssl, buf, sizeof(buf));
+      if (n <= 0) {
+        break;
+      }
+      if (send(backend_sock, buf, n, 0) <= 0) {
+        break;
+      }
+    }
+    if (poll(pfds, 2, /*timeout=*/-1) <= 0) {
+      break;
+    }
+    if (pfds[0].revents & (POLLIN | POLLERR | POLLHUP)) {
+      int n = SSL_read(ssl, buf, sizeof(buf));
+      if (n <= 0) {
+        break;
+      }
+      if (send(backend_sock, buf, n, 0) <= 0) {
+        break;
+      }
+    }
+    if (pfds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
+      ssize_t n = recv(backend_sock, buf, sizeof(buf), 0);
+      if (n <= 0) {
+        break;
+      }
+      if (SSL_write(ssl, buf, static_cast<int>(n)) <= 0) {
+        break;
+      }
+    }
+  }
+  close(backend_sock);
+#endif
+  return true;
+}
+
 bool Server(const std::vector<std::string> &args) {
   if (!InitSocketLibrary()) {
     return false;
@@ -374,6 +442,48 @@ bool Server(const std::vector<std::string> &args) {
     }
     if (!SSL_CTX_use_certificate(ctx.get(), cert.get())) {
       fprintf(stderr, "Failed to set certificate.\n");
+      return false;
+    }
+  }
+
+  if (args_map.count("-trust-anchor-id") != 0) {
+    const std::string &tai_text = args_map["-trust-anchor-id"];
+    bssl::ScopedCBB cbb;
+    if (!CBB_init(cbb.get(), 16) ||
+        !CBB_add_asn1_relative_oid_from_text(cbb.get(), tai_text.data(),
+                                             tai_text.size()) ||
+        !CBB_flush(cbb.get())) {
+      fprintf(stderr, "Invalid relative OID for -trust-anchor-id: %s\n",
+              tai_text.c_str());
+      return false;
+    }
+    X509 *leaf = SSL_CTX_get0_certificate(ctx.get());
+    EVP_PKEY *pkey = SSL_CTX_get0_privatekey(ctx.get());
+    if (!leaf || !pkey) {
+      fprintf(stderr, "No certificate/private key available for -trust-anchor-id\n");
+      return false;
+    }
+    uint8_t *der = nullptr;
+    int der_len = i2d_X509(leaf, &der);
+    bssl::UniquePtr<uint8_t> free_der(der);
+    if (der_len < 0) {
+      return false;
+    }
+    bssl::UniquePtr<CRYPTO_BUFFER> cert_buf(
+        CRYPTO_BUFFER_new(der, der_len, nullptr));
+    CRYPTO_BUFFER *certs[] = {cert_buf.get()};
+    bssl::UniquePtr<SSL_CREDENTIAL> cred(SSL_CREDENTIAL_new_x509());
+    if (!cred ||
+        !SSL_CREDENTIAL_set1_private_key(cred.get(), pkey) ||
+        !SSL_CREDENTIAL_set1_cert_chain(cred.get(), certs, 1) ||
+        !SSL_CREDENTIAL_set1_trust_anchor_id(cred.get(), CBB_data(cbb.get()),
+                                             CBB_len(cbb.get()))) {
+      fprintf(stderr, "Failed to configure credential with trust anchor ID.\n");
+      return false;
+    }
+    SSL_CREDENTIAL_set_must_match_issuer(cred.get(), 1);
+    if (!SSL_CTX_add1_credential(ctx.get(), cred.get())) {
+      fprintf(stderr, "Failed to add credential with trust anchor ID.\n");
       return false;
     }
   }
@@ -519,7 +629,9 @@ bool Server(const std::vector<std::string> &args) {
     bssl::UniquePtr<BIO> bio_stderr(BIO_new_fp(stderr, BIO_NOCLOSE));
     PrintConnectionInfo(bio_stderr.get(), ssl.get());
 
-    if (args_map.count("-www") != 0) {
+    if (args_map.count("-proxy") != 0) {
+      result = HandleProxy(ssl.get(), args_map["-proxy"]);
+    } else if (args_map.count("-www") != 0) {
       result = HandleWWW(ssl.get());
     } else {
       result = TransferData(ssl.get(), sock);
