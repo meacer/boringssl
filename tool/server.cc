@@ -23,6 +23,7 @@
 
 #if !defined(OPENSSL_WINDOWS)
 #include <poll.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -323,7 +324,7 @@ static bool HandleProxy(SSL *ssl, const std::string &target) {
         break;
       }
     }
-    if (poll(pfds, 2, /*timeout=*/-1) <= 0) {
+    if (poll(pfds, 2, /*timeout=*/15000) <= 0) {
       break;
     }
     if (pfds[0].revents & (POLLIN | POLLERR | POLLHUP)) {
@@ -487,6 +488,39 @@ bool Server(const std::vector<std::string> &args) {
       fprintf(stderr, "Failed to configure credential with trust anchor ID.\n");
       return false;
     }
+
+    // If tai_text is an MTC single landmark ID (<CA>.1.<log>.<landmark>),
+    // also add the corresponding MTC landmark group inclusion (<CA>.2.<log>
+    // covering [landmark, landmark + 168]) so clients advertising the current
+    // landmark group ID (e.g. Chrome's PKI Metadata Fastpush) match.
+    size_t dot3 = tai_text.rfind('.');
+    if (dot3 != std::string::npos && dot3 > 0) {
+      size_t dot2 = tai_text.rfind('.', dot3 - 1);
+      if (dot2 != std::string::npos && dot2 > 0) {
+        size_t dot1 = tai_text.rfind('.', dot2 - 1);
+        if (dot1 != std::string::npos &&
+            tai_text.substr(dot1, dot2 - dot1) == ".1") {
+          std::string ca_prefix = tai_text.substr(0, dot1);
+          std::string log_num = tai_text.substr(dot2 + 1, dot3 - dot2 - 1);
+          std::string lm_str = tai_text.substr(dot3 + 1);
+          char *endptr = nullptr;
+          unsigned long long lm_num = strtoull(lm_str.c_str(), &endptr, 10);
+          if (endptr != lm_str.c_str() && *endptr == '\0') {
+            std::string group_base = ca_prefix + ".2." + log_num;
+            bssl::ScopedCBB group_cbb;
+            if (CBB_init(group_cbb.get(), 16) &&
+                CBB_add_asn1_relative_oid_from_text(
+                    group_cbb.get(), group_base.data(), group_base.size()) &&
+                CBB_flush(group_cbb.get())) {
+              SSL_CREDENTIAL_add1_trust_anchor_group_inclusion(
+                  cred.get(), CBB_data(group_cbb.get()),
+                  CBB_len(group_cbb.get()), lm_num, lm_num + 168);
+            }
+          }
+        }
+      }
+    }
+
     SSL_CREDENTIAL_set_must_match_issuer(cred.get(), 1);
     if (!SSL_CTX_add1_credential(ctx.get(), cred.get())) {
       fprintf(stderr, "Failed to add credential with trust anchor ID.\n");
@@ -617,12 +651,34 @@ bool Server(const std::vector<std::string> &args) {
     return false;
   }
 
+#if !defined(OPENSSL_WINDOWS)
+  if (args_map.count("-loop") != 0) {
+    signal(SIGCHLD, SIG_IGN);
+  }
+#endif
+
   bool result = true;
   do {
     int sock = -1;
     if (!listener.Accept(&sock)) {
       return false;
     }
+
+#if !defined(OPENSSL_WINDOWS)
+    if (args_map.count("-loop") != 0) {
+      pid_t pid = fork();
+      if (pid < 0) {
+        perror("fork");
+        close(sock);
+        continue;
+      }
+      if (pid > 0) {
+        close(sock);
+        continue;
+      }
+      alarm(30);
+    }
+#endif
 
     BIO *bio = BIO_new_socket(sock, BIO_CLOSE);
     bssl::UniquePtr<SSL> ssl(SSL_new(ctx.get()));
@@ -637,6 +693,11 @@ bool Server(const std::vector<std::string> &args) {
       int ssl_err = SSL_get_error(ssl.get(), ret);
       PrintSSLError(stderr, "Error while connecting", ssl_err, ret);
       result = false;
+#if !defined(OPENSSL_WINDOWS)
+      if (args_map.count("-loop") != 0) {
+        _exit(1);
+      }
+#endif
       continue;
     }
 
@@ -651,6 +712,11 @@ bool Server(const std::vector<std::string> &args) {
     } else {
       result = TransferData(ssl.get(), sock);
     }
+#if !defined(OPENSSL_WINDOWS)
+    if (args_map.count("-loop") != 0) {
+      _exit(result ? 0 : 1);
+    }
+#endif
   } while (args_map.count("-loop") != 0);
 
   return result;

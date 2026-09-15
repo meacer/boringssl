@@ -147,6 +147,9 @@ bool ssl_credential_matches_requested_issuers(SSL_HANDSHAKE *hs,
         OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
         return false;
       }
+      UniquePtr<char> cand_text(CBS_asn1_relative_oid_to_text(&candidate));
+      fprintf(stderr, "  [TAI Server] Client requested OID: %s\n",
+              cand_text ? cand_text.get() : "(invalid)");
       if (candidate == Span(cred->trust_anchor_id) ||
           std::any_of(cred->trust_anchor_group_patterns.begin(),
                       cred->trust_anchor_group_patterns.end(),
@@ -154,10 +157,14 @@ bool ssl_credential_matches_requested_issuers(SSL_HANDSHAKE *hs,
                         return ssl_trust_anchor_pattern_matches_id(pattern,
                                                                    candidate);
                       })) {
+        fprintf(stderr, "  [TAI Server] -> MATCHED credential!\n");
         hs->matched_peer_trust_anchor = true;
         return true;
       }
     }
+    fprintf(stderr, "  [TAI Server] -> NO MATCH among client candidates.\n");
+  } else {
+    fprintf(stderr, "  [TAI Server] Client did NOT send trust_anchors extension.\n");
   }
 
   OPENSSL_PUT_ERROR(SSL, SSL_R_NO_MATCHING_ISSUER);

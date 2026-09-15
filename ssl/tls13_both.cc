@@ -323,6 +323,7 @@ bool tls13_process_certificate(SSL_HANDSHAKE *hs, const SSLMessage &msg,
         return false;
       }
       hs->peer_matched_trust_anchor = true;
+      ssl->s3->peer_matched_trust_anchor = true;
     }
   }
 

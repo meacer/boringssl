@@ -401,6 +401,11 @@ void PrintConnectionInfo(BIO *bio, const SSL *ssl) {
     if (chain != nullptr) {
       BIO_printf(bio, "  Cert chain length: %zu\n",
                  sk_CRYPTO_BUFFER_num(chain));
+      if (sk_CRYPTO_BUFFER_num(chain) > 0) {
+        const CRYPTO_BUFFER *leaf = sk_CRYPTO_BUFFER_value(chain, 0);
+        BIO_printf(bio, "  Leaf cert DER size: %zu bytes\n",
+                   CRYPTO_BUFFER_len(leaf));
+      }
     }
     BIO_printf(bio, "  Peer matched trust anchor: %s\n",
                SSL_peer_matched_trust_anchor(ssl) ? "yes" : "no");

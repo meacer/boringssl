@@ -2950,6 +2950,10 @@ struct SSL3_STATE {
   // requested amount of padding.
   bool server_sent_requested_padding : 1;
 
+  // peer_matched_trust_anchor is true if the peer indicated a match with one of
+  // our requested trust anchors.
+  bool peer_matched_trust_anchor : 1;
+
   // hs_buf is the buffer of handshake data to process.
   UniquePtr<BUF_MEM> hs_buf;
 

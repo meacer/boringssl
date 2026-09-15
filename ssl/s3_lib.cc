@@ -45,7 +45,8 @@ SSL3_STATE::SSL3_STATE()
       alert_dispatch(false),
       renegotiate_pending(false),
       used_hello_retry_request(false),
-      server_sent_requested_padding(false) {}
+      server_sent_requested_padding(false),
+      peer_matched_trust_anchor(false) {}
 
 SSL3_STATE::~SSL3_STATE() {}
 

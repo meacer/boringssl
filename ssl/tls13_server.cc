@@ -461,6 +461,15 @@ static enum ssl_hs_wait_t do_select_parameters(SSL_HANDSHAKE *hs) {
       if (check_signature_credential(hs, *allowed_cert_types, cred, &sigalg)) {
         hs->credential = UpRef(cred);
         hs->signature_algorithm = sigalg;
+        if (cred->chain != nullptr &&
+            sk_CRYPTO_BUFFER_num(cred->chain.get()) > 0) {
+          fprintf(stderr,
+                  "  [TAI Server] Selected cert DER size: %zu bytes "
+                  "(must_match_issuer=%d)\n",
+                  CRYPTO_BUFFER_len(
+                      sk_CRYPTO_BUFFER_value(cred->chain.get(), 0)),
+                  cred->must_match_issuer);
+        }
         break;
       }
     }
