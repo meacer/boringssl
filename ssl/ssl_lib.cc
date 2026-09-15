@@ -3970,7 +3970,10 @@ enum ssl_compliance_policy_t SSL_get_compliance_policy(const SSL *ssl) {
 int SSL_peer_matched_trust_anchor(const SSL *ssl) {
   const SSLImpl *impl = FromOpaque(ssl);
   return impl->s3->peer_matched_trust_anchor ||
-         (impl->s3->hs != nullptr && impl->s3->hs->peer_matched_trust_anchor);
+         impl->s3->matched_peer_trust_anchor ||
+         (impl->s3->hs != nullptr &&
+          (impl->s3->hs->peer_matched_trust_anchor ||
+           impl->s3->hs->matched_peer_trust_anchor));
 }
 
 void SSL_get0_peer_available_trust_anchors(const SSL *ssl, const uint8_t **out,

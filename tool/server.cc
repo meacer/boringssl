@@ -169,6 +169,11 @@ static const struct argument kArguments[] = {
         "Reverse-proxy decrypted traffic to the specified backend host:port (e.g. '127.0.0.1:80' for Apache).",
     },
     {
+        "-tai-fallback-proxy",
+        kOptionalArgument,
+        "Reverse-proxy decrypted traffic to this backend host:port when the client did not match the trust anchor ID.",
+    },
+    {
         "",
         kOptionalArgument,
         "",
@@ -535,6 +540,8 @@ bool Server(const std::vector<std::string> &args) {
         return false;
       }
     }
+    SSL_CTX_set_options(ctx.get(), SSL_OP_NO_TICKET);
+    SSL_CTX_set_session_cache_mode(ctx.get(), SSL_SESS_CACHE_OFF);
   }
 
   if (args_map.count("-ech-key") + args_map.count("-ech-config") == 1) {
@@ -706,7 +713,16 @@ bool Server(const std::vector<std::string> &args) {
     PrintConnectionInfo(bio_stderr.get(), ssl.get());
 
     if (args_map.count("-proxy") != 0) {
-      result = HandleProxy(ssl.get(), args_map["-proxy"]);
+      std::string proxy_target = args_map["-proxy"];
+      if (!SSL_peer_matched_trust_anchor(ssl.get()) &&
+          args_map.count("-tai-fallback-proxy") != 0) {
+        proxy_target = args_map["-tai-fallback-proxy"];
+        fprintf(stderr,
+                "  [TAI Server] Client did not negotiate TAI; routing to "
+                "fallback proxy %s\n",
+                proxy_target.c_str());
+      }
+      result = HandleProxy(ssl.get(), proxy_target);
     } else if (args_map.count("-www") != 0) {
       result = HandleWWW(ssl.get());
     } else {

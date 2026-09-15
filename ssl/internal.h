@@ -2954,6 +2954,10 @@ struct SSL3_STATE {
   // our requested trust anchors.
   bool peer_matched_trust_anchor : 1;
 
+  // matched_peer_trust_anchor is true if we (as server) matched a trust anchor
+  // requested by the peer.
+  bool matched_peer_trust_anchor : 1;
+
   // hs_buf is the buffer of handshake data to process.
   UniquePtr<BUF_MEM> hs_buf;
 

@@ -159,6 +159,7 @@ bool ssl_credential_matches_requested_issuers(SSL_HANDSHAKE *hs,
                       })) {
         fprintf(stderr, "  [TAI Server] -> MATCHED credential!\n");
         hs->matched_peer_trust_anchor = true;
+        hs->ssl->s3->matched_peer_trust_anchor = true;
         return true;
       }
     }
