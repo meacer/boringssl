@@ -164,6 +164,11 @@ static const struct argument kArguments[] = {
         "serve when the client does not match -trust-anchor-id.",
     },
     {
+        "-tai-fallback-key",
+        kOptionalArgument,
+        "PEM-encoded file containing the private key for -tai-fallback-cert.",
+    },
+    {
         "-proxy",
         kOptionalArgument,
         "Reverse-proxy decrypted traffic to the specified backend host:port (e.g. '127.0.0.1:80' for Apache).",
@@ -538,6 +543,15 @@ bool Server(const std::vector<std::string> &args) {
         fprintf(stderr, "Failed to load fallback cert chain: %s\n",
                 fallback_cert.c_str());
         return false;
+      }
+      if (args_map.count("-tai-fallback-key") != 0) {
+        const std::string &fallback_key = args_map["-tai-fallback-key"];
+        if (!SSL_CTX_use_PrivateKey_file(ctx.get(), fallback_key.c_str(),
+                                         SSL_FILETYPE_PEM)) {
+          fprintf(stderr, "Failed to load fallback private key: %s\n",
+                  fallback_key.c_str());
+          return false;
+        }
       }
     }
     SSL_CTX_set_options(ctx.get(), SSL_OP_NO_TICKET);
