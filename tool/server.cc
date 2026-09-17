@@ -389,15 +389,21 @@ bool Server(const std::vector<std::string> &args) {
   bool installed_cred = false;
   if (args_map.count("-key") != 0) {
     std::string key = args_map["-key"];
-    if (!SSL_CTX_use_PrivateKey_file(ctx.get(), key.c_str(),
-                                     SSL_FILETYPE_PEM)) {
-      fprintf(stderr, "Failed to load private key: %s\n", key.c_str());
-      return false;
-    }
+    // Configure the certificate before the private key: in the other order, a
+    // key that does not match the certificate is silently dropped rather than
+    // reported here.
     const std::string &cert =
         args_map.count("-cert") != 0 ? args_map["-cert"] : key;
     if (!SSL_CTX_use_certificate_chain_file(ctx.get(), cert.c_str())) {
       fprintf(stderr, "Failed to load cert chain: %s\n", cert.c_str());
+      return false;
+    }
+    if (!SSL_CTX_use_PrivateKey_file(ctx.get(), key.c_str(),
+                                     SSL_FILETYPE_PEM)) {
+      fprintf(stderr,
+              "Failed to load private key %s, or it does not match the "
+              "certificate in %s\n",
+              key.c_str(), cert.c_str());
       return false;
     }
     installed_cred = true;
