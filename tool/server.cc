@@ -14,6 +14,9 @@
 
 #include <openssl/base.h>
 
+#include <cstdint>
+#include <memory>
+
 #include <openssl/digest.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
@@ -156,6 +159,14 @@ static const struct argument kArguments[] = {
         "-trust-anchor-id",
         kOptionalArgument,
         "A relative OID in text form (e.g. '1.2.3') to configure on the server credential for Trust Anchor Identifiers.",
+    },
+    {
+        "-trust-anchor-log-number",
+        kOptionalArgument,
+        "The MTC issuance log number used to derive the CA's landmark group ID "
+        "when -trust-anchor-id is a bare CA ID, i.e. when serving a standalone "
+        "MTC. Defaults to 1. Ignored when -trust-anchor-id is a landmark ID, "
+        "which already carries the log number.",
     },
     {
         "-tai-fallback-cert",
@@ -505,10 +516,22 @@ bool Server(const std::vector<std::string> &args) {
       return false;
     }
 
-    // If tai_text is an MTC single landmark ID (<CA>.1.<log>.<landmark>),
-    // also add the corresponding MTC landmark group inclusion (<CA>.2.<log>
-    // covering [landmark, landmark + 168]) so clients advertising the current
-    // landmark group ID (e.g. Chrome's PKI Metadata Fastpush) match.
+    // Clients advertise a landmark group ID (<CA>.2.<log>.<landmark>) to accept
+    // a CA's standalone certs together with all of its active landmarks at once,
+    // so register the group inclusion that covers whichever cert is configured:
+    //
+    //   - tai_text is a single landmark ID (<CA>.1.<log>.<landmark>), i.e. a
+    //     landmark-relative cert: accept that landmark and the 168 that follow
+    //     it, the window over which it stays verifiable.
+    //   - otherwise tai_text is the bare CA ID, i.e. a standalone cert: accept
+    //     any landmark of the CA's log, since a standalone cert is verified from
+    //     its cosignatures rather than from a landmark.
+    std::string ca_id = tai_text;
+    std::string log_num = "1";
+    if (args_map.count("-trust-anchor-log-number") != 0) {
+      log_num = args_map["-trust-anchor-log-number"];
+    }
+    uint64_t group_min = 0, group_max = UINT64_MAX;
     size_t dot3 = tai_text.rfind('.');
     if (dot3 != std::string::npos && dot3 > 0) {
       size_t dot2 = tai_text.rfind('.', dot3 - 1);
@@ -516,25 +539,31 @@ bool Server(const std::vector<std::string> &args) {
         size_t dot1 = tai_text.rfind('.', dot2 - 1);
         if (dot1 != std::string::npos &&
             tai_text.substr(dot1, dot2 - dot1) == ".1") {
-          std::string ca_prefix = tai_text.substr(0, dot1);
-          std::string log_num = tai_text.substr(dot2 + 1, dot3 - dot2 - 1);
           std::string lm_str = tai_text.substr(dot3 + 1);
           char *endptr = nullptr;
           unsigned long long lm_num = strtoull(lm_str.c_str(), &endptr, 10);
           if (endptr != lm_str.c_str() && *endptr == '\0') {
-            std::string group_base = ca_prefix + ".2." + log_num;
-            bssl::ScopedCBB group_cbb;
-            if (CBB_init(group_cbb.get(), 16) &&
-                CBB_add_asn1_relative_oid_from_text(
-                    group_cbb.get(), group_base.data(), group_base.size()) &&
-                CBB_flush(group_cbb.get())) {
-              SSL_CREDENTIAL_add1_trust_anchor_group_inclusion(
-                  cred.get(), CBB_data(group_cbb.get()),
-                  CBB_len(group_cbb.get()), lm_num, lm_num + 168);
-            }
+            ca_id = tai_text.substr(0, dot1);
+            log_num = tai_text.substr(dot2 + 1, dot3 - dot2 - 1);
+            group_min = lm_num;
+            group_max = lm_num + 168;
           }
         }
       }
+    }
+    std::string group_base = ca_id + ".2." + log_num;
+    bssl::ScopedCBB group_cbb;
+    if (CBB_init(group_cbb.get(), 16) &&
+        CBB_add_asn1_relative_oid_from_text(group_cbb.get(), group_base.data(),
+                                            group_base.size()) &&
+        CBB_flush(group_cbb.get())) {
+      SSL_CREDENTIAL_add1_trust_anchor_group_inclusion(
+          cred.get(), CBB_data(group_cbb.get()), CBB_len(group_cbb.get()),
+          group_min, group_max);
+    } else {
+      fprintf(stderr, "Invalid landmark group ID for -trust-anchor-id: %s\n",
+              group_base.c_str());
+      return false;
     }
 
     SSL_CREDENTIAL_set_must_match_issuer(cred.get(), 1);
