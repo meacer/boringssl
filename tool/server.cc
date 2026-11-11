@@ -37,6 +37,25 @@
 
 BSSL_NAMESPACE_BEGIN
 
+// AddBase128 appends `v` to `cbb` as a minimally-encoded base-128 integer,
+// the encoding of an OID component.
+static bool AddBase128(CBB *cbb, uint64_t v) {
+  int len = 1;
+  for (uint64_t t = v >> 7; t != 0; t >>= 7) {
+    len++;
+  }
+  for (int i = len - 1; i >= 0; i--) {
+    uint8_t b = static_cast<uint8_t>((v >> (7 * i)) & 0x7f);
+    if (i != 0) {
+      b |= 0x80;
+    }
+    if (!CBB_add_u8(cbb, b)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static const struct argument kArguments[] = {
     {
         "-accept",
@@ -551,16 +570,41 @@ bool Server(const std::vector<std::string> &args) {
         }
       }
     }
+    // Register the group as a trust anchor ID pattern
+    // (draft-ietf-tls-trust-anchor-ids, as MTC draft-07 §8.2.1 uses it):
+    // <CA>.2.<log>.{group_min-group_max}. Each fixed component is encoded as an
+    // equal min/max pair, then the landmark range, with an unbounded max
+    // written as the 0x80 marker.
     std::string group_base = ca_id + ".2." + log_num;
-    bssl::ScopedCBB group_cbb;
-    if (CBB_init(group_cbb.get(), 16) &&
-        CBB_add_asn1_relative_oid_from_text(group_cbb.get(), group_base.data(),
+    bssl::ScopedCBB base_cbb, pattern_cbb;
+    bool pattern_ok =
+        CBB_init(base_cbb.get(), 16) &&
+        CBB_add_asn1_relative_oid_from_text(base_cbb.get(), group_base.data(),
                                             group_base.size()) &&
-        CBB_flush(group_cbb.get())) {
-      SSL_CREDENTIAL_add1_trust_anchor_group_inclusion(
-          cred.get(), CBB_data(group_cbb.get()), CBB_len(group_cbb.get()),
-          group_min, group_max);
-    } else {
+        CBB_flush(base_cbb.get()) && CBB_init(pattern_cbb.get(), 32);
+    if (pattern_ok) {
+      const uint8_t *base = CBB_data(base_cbb.get());
+      size_t base_len = CBB_len(base_cbb.get());
+      size_t start = 0;
+      for (size_t i = 0; i < base_len && pattern_ok; i++) {
+        // A component ends at a byte with the high bit clear.
+        if ((base[i] & 0x80) == 0) {
+          pattern_ok =
+              CBB_add_bytes(pattern_cbb.get(), base + start, i + 1 - start) &&
+              CBB_add_bytes(pattern_cbb.get(), base + start, i + 1 - start);
+          start = i + 1;
+        }
+      }
+      pattern_ok = pattern_ok && AddBase128(pattern_cbb.get(), group_min) &&
+                   (group_max == UINT64_MAX
+                        ? CBB_add_u8(pattern_cbb.get(), 0x80)
+                        : AddBase128(pattern_cbb.get(), group_max)) &&
+                   CBB_flush(pattern_cbb.get());
+    }
+    if (!pattern_ok ||
+        !SSL_CREDENTIAL_add1_trust_anchor_group(cred.get(),
+                                                CBB_data(pattern_cbb.get()),
+                                                CBB_len(pattern_cbb.get()))) {
       fprintf(stderr, "Invalid landmark group ID for -trust-anchor-id: %s\n",
               group_base.c_str());
       return false;
